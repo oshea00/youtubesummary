@@ -122,7 +122,7 @@ def sanitize_filename(filename):
     return filename
 
 
-def save_to_markdown(transcript, summary, output_file, video_url):
+def save_to_markdown(transcript, summary, output_file, video_url, model_name=None):
     """Save transcript and summary to markdown file."""
     # Sanitize the output filename
     safe_filename = sanitize_filename(output_file)
@@ -145,6 +145,8 @@ def save_to_markdown(transcript, summary, output_file, video_url):
 ## Summary
 
 {summary}
+
+*Generated using: {model_name or 'AI model'}*
 
 ## Full Transcript
 
@@ -228,7 +230,7 @@ Examples:
     print("Summary generated successfully")
 
     # Save to markdown
-    if not save_to_markdown(transcript, summary, args.output, url):
+    if not save_to_markdown(transcript, summary, args.output, url, args.model):
         sys.exit(1)
 
 
