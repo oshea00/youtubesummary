@@ -3,6 +3,7 @@
 MCP wrapper for YouTube Summary functionality.
 """
 
+import contextlib
 import json
 import sys
 from typing import Dict, Any, List, Optional
@@ -12,6 +13,17 @@ from src.youtubesummary.youtube_summary import (
     generate_summary,
     save_to_markdown
 )
+
+
+@contextlib.contextmanager
+def stdout_to_stderr():
+    """Redirect stdout to stderr so tool print() calls don't corrupt the MCP STDIO stream."""
+    old_stdout = sys.stdout
+    sys.stdout = sys.stderr
+    try:
+        yield
+    finally:
+        sys.stdout = old_stdout
 
 
 class MCPWrapper:
@@ -64,21 +76,21 @@ class MCPWrapper:
         """Call a tool with given arguments."""
         if name not in self.tools:
             return {
-                "error": f"Unknown tool: {name}",
+                "content": [{"type": "text", "text": f"Unknown tool: {name}"}],
                 "isError": True
             }
-        
+
         try:
             if name == "youtube_summary":
                 return self._youtube_summary(arguments)
             else:
                 return {
-                    "error": f"Tool {name} not implemented",
+                    "content": [{"type": "text", "text": f"Tool {name} not implemented"}],
                     "isError": True
                 }
         except Exception as e:
             return {
-                "error": f"Error calling tool {name}: {str(e)}",
+                "content": [{"type": "text", "text": f"Error calling tool {name}: {str(e)}"}],
                 "isError": True
             }
     
@@ -91,48 +103,49 @@ class MCPWrapper:
         
         if not url:
             return {
-                "error": "URL is required",
+                "content": [{"type": "text", "text": "URL is required"}],
                 "isError": True
             }
-        
-        # Extract video ID
-        video_id = extract_video_id(url)
-        if not video_id:
-            return {
-                "error": "Invalid YouTube URL or video ID",
-                "isError": True
+
+        with stdout_to_stderr():
+            # Extract video ID
+            video_id = extract_video_id(url)
+            if not video_id:
+                return {
+                    "content": [{"type": "text", "text": "Invalid YouTube URL or video ID"}],
+                    "isError": True
+                }
+
+            # Get transcript
+            transcript = get_transcript(video_id)
+            if not transcript:
+                return {
+                    "content": [{"type": "text", "text": "Failed to download transcript"}],
+                    "isError": True
+                }
+
+            # Generate summary
+            summary = generate_summary(transcript, model)
+            if not summary:
+                return {
+                    "content": [{"type": "text", "text": "Failed to generate summary"}],
+                    "isError": True
+                }
+
+            result = {
+                "video_id": video_id,
+                "video_url": url,
+                "transcript": transcript,
+                "summary": summary,
+                "model_used": model
             }
-        
-        # Get transcript
-        transcript = get_transcript(video_id)
-        if not transcript:
-            return {
-                "error": "Failed to download transcript",
-                "isError": True
-            }
-        
-        # Generate summary
-        summary = generate_summary(transcript, model)
-        if not summary:
-            return {
-                "error": "Failed to generate summary",
-                "isError": True
-            }
-        
-        result = {
-            "video_id": video_id,
-            "video_url": url,
-            "transcript": transcript,
-            "summary": summary,
-            "model_used": model
-        }
-        
-        # Save to file if requested
-        if save_to_file:
-            success = save_to_markdown(transcript, summary, output_file, url, model)
-            result["saved_to_file"] = success
-            if success:
-                result["output_file"] = output_file
+
+            # Save to file if requested
+            if save_to_file:
+                success = save_to_markdown(transcript, summary, output_file, url, model)
+                result["saved_to_file"] = success
+                if success:
+                    result["output_file"] = output_file
         
         return {
             "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
@@ -147,7 +160,27 @@ def main():
         try:
             request = json.loads(line.strip())
             
-            if request.get("method") == "tools/list":
+            method = request.get("method")
+
+            # Notifications have no "id" and require no response
+            if "id" not in request:
+                continue
+
+            if method == "initialize":
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {
+                            "name": "youtube-summary",
+                            "version": "1.0.0"
+                        }
+                    }
+                }
+
+            elif method == "tools/list":
                 response = {
                     "jsonrpc": "2.0",
                     "id": request.get("id"),
@@ -156,7 +189,7 @@ def main():
                     }
                 }
             
-            elif request.get("method") == "tools/call":
+            elif method == "tools/call":
                 params = request.get("params", {})
                 tool_name = params.get("name")
                 arguments = params.get("arguments", {})
